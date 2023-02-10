@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 data_log = logger.from_json('log.json', 't')
 N = len(data_log.times)
 samp_freq = N / (data_log.end_time - data_log.start_time)
-step_per_sample = 10
+step_per_sample = 4
 dt = 1/samp_freq/step_per_sample
 ts = np.linspace(data_log.start_time, data_log.end_time, N)
 
@@ -26,42 +26,47 @@ for i in range(N):
 
 x0 = measured_x[:,0]
 
+#p = [m1, m2, r1, r2, l1, I1, I2, B11, B22, Kb11, Kb22]
+#     0   1   2   3   4   5   6   7    8    9     10
 def dynamics(state, input, p):
-    M = MX(2,2)
-    M[0,0] = p[0]
-    M[0,1] = p[1]
-    M[1,0] = p[2]
-    M[1,1] = p[3]
+    A = p[0]*p[2]**2 + p[1]*p[4]**2 + p[5]
+    B = p[1]*p[3]**2 + p[6]
+    h = p[1]*p[4]*p[3]
+    c2 = cos(state[1])
+    den = h**2*c2**2 - A*B
 
-    H = MX(2,2)
-    H[0,0] = 2*p[4]
-    H[0,1] = p[4]
-    H[1,0] = p[4]
+    Minv = MX(2,2)
+    Minv[0,0] = -B
+    Minv[0,1] = B + h*c2
+    Minv[1,0] = B + h*c2
+    Minv[1,1] = -(A + B + 2*h*c2)
+    Minv = Minv/den
 
     Kg = MX(Sparsity.upper(2))
-    Kg[0,0] = p[5]
-    Kg[0,1] = p[6]
-    Kg[1,1] = p[7]
+    Kg[0,0] = p[0]*p[2] + p[1]*p[4]
+    Kg[0,1] = p[1]*p[3]
+    Kg[1,1] = p[1]*p[3]
+    Kg = Kg * 9.806
 
     B = MX(Sparsity.diag(2))
-    B[0,0] = p[8]
-    B[1,1] = p[9]
+    B[0,0] = p[7]
+    B[1,1] = p[8]
 
     Kb = MX(Sparsity.diag(2))
-    Kb[0,0] = p[10]
-    Kb[1,1] = p[11]
+    Kb[0,0] = p[9]
+    Kb[1,1] = p[10]
 
     C = MX(2,2)
     C[0,0] = -state[3]
     C[0,1] = -(state[2]+state[3])
     C[1,0] = state[2]
-    C = C*p[4]*sin(state[1])
+    C = C*h*sin(state[1])
 
     cosq = cos(vertcat(state[0], state[0]+state[1]))
 
     dstate = MX(4,1)
     dstate[:2] = state[2:]
-    dstate[2:] = solve(M + H*cos(state[1]), B @ input - Kb @ state[2:] - C @ state[2:] - Kg @ cosq)
+    dstate[2:] = Minv @ (B @ input - Kb @ state[2:] - C @ state[2:] - Kg @ cosq)
     return dstate
 
 def rk4(f, x, u, dt):
@@ -81,19 +86,17 @@ def step(state, input, parameters):
 
 def identify(initial_guess = None):
     if initial_guess is None:
-        initial_guess = np.ones(12)
+        initial_guess = np.ones(11)
     opti = Opti()
 
-    # p[0,1,2,3] = [M11, M12, M21, M22]
-    # p[4] = h
-    # p[5,6,7] = [Kg11, Kg12, Kg22]
-    # p[8,9] = [B11, B22]
-    # p[10,11] = [Kb11, Kb12]
-    p = opti.variable(12)
+    #p = [m1, m2, r1, r2, l1, I1, I2, B11, B22, Kb11, Kb22]
+    #     0   1   2   3   4   5   6   7    8    9     10
+    p = opti.variable(11)
     opti.subject_to(p[:] > 0.0)
     opti.set_initial(p, initial_guess)
 
-    opti.subject_to(p[5:8] == initial_guess[5:8])
+    opti.subject_to(p[1] == initial_guess[1])
+    opti.subject_to(p[4] == initial_guess[4])
 
     X = opti.variable(4, N)
     opti.set_initial(X, measured_x)
@@ -182,7 +185,7 @@ def get_theoretical():
     Kb11 = G1*G1*N1*Kt/Kv/Rm
     Kb22 = G2*G2*N2*Kt/Kv/Rm
 
-    return np.array([m11, m12, m21, m22, h, Kg11, Kg12, Kg22, B11, B22, Kb11, Kb22])
+    return np.array([m1, m2, r1, r2, l1, I1, I2, B11, B22, Kb11, Kb22])
 
 def main():
     p_guess = get_theoretical()
